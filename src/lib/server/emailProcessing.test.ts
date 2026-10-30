@@ -121,3 +121,27 @@ test('AI result with missing tripName falls back to title instead of being disca
 	vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ isTravel: true, type: 'hotel', title: 'Hampton Inn', startAt: '2027-05-03T10:00:00Z' }) } }] }), { status: 200 }));
 	await expect(parseEmailForUser(user.id, 'Hotel', 'May 3, 2027')).resolves.toMatchObject({ tripName: 'Hampton Inn' });
 });
+
+test('user and global AI parses share one 40s budget', async () => {
+	vi.restoreAllMocks();
+	vi.spyOn(console, 'error').mockImplementation(() => {});
+	const budget = new AbortController();
+	const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(budget.signal);
+	const user = makeUser(db(), { email: 'ai-budget@example.com' });
+	updateSettings({ allowUserParsingProviders: true, globalAiEnabled: true, globalAiBaseUrl: 'https://global.example/v1', globalAiModel: 'global', globalAiToken: encrypt('gtoken') });
+	saveEmailProcessingConfig(user.id, {
+		enabled: false, imapHost: null, imapPort: null, imapSecurity: 'ssl/tls', imapUsername: null,
+		imapMailbox: 'INBOX', useImapForSmtp: false, smtpHost: null, smtpPort: null,
+		smtpSecurity: 'starttls', smtpUsername: null, smtpFrom: null, aiEnabled: true,
+		aiBaseUrl: 'https://user.example/v1', aiModel: 'user-model', aiTokenUrl: null,
+		aiClientId: null, aiClientSecret: null, aiScope: null, aiToken: 'usertoken'
+	});
+	const fetchMock = vi.spyOn(globalThis, 'fetch')
+		.mockRejectedValueOnce(new Error('boom'))
+		.mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ isTravel: true, tripName: 'Paris', type: 'flight', title: 'Flight', startAt: '2027-05-03T10:00:00Z' }) } }] }), { status: 200 }));
+	await expect(parseEmailForUser(user.id, 'Flight', 'May 3, 2027')).resolves.toMatchObject({ tripName: 'Paris' });
+	expect(timeout).toHaveBeenCalledTimes(1);
+	expect(timeout).toHaveBeenCalledWith(40_000);
+	expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ signal: budget.signal });
+	expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ signal: budget.signal });
+});
